@@ -1,6 +1,6 @@
-import pandas as pd
+# import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from collections import Counter
 from nltk.corpus import stopwords, wordnet
 from nltk.tokenize import word_tokenize
@@ -12,9 +12,22 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 import nltk
 import string
 import re
+from model import model
 
 lemmatizer = WordNetLemmatizer()
 stemmer = PorterStemmer()
+
+
+# Function for training a new model Parameter is the created data frame
+# Calls the preprocess_data function and receives the data frame, y after one hot encoding,
+# vocabulary size and the number of classes or unique values in the topic group
+# After preprocessing the function passes the variables returned by the preprocessing function and
+# passes them to the model function for model creating then prints out the variables being used to create the model
+def train_new_model(df):
+    df, y, vocab, length, num_classes = preprocess_data(df)
+    model(df, y, vocab, length, num_classes)
+    print("Model would be trained here with vocab={}, length={}, num_classes={}".format(vocab, length, num_classes))
+
 
 # Function for detecting non-english words and symbols
 def contains_emoji(text):
@@ -61,12 +74,17 @@ def get_wordnet_pos(word):
     return tag_dict.get(tag, wordnet.NOUN)
 
 
+# Function for lemmatizing the dataset, this considers the context and converts the word to its meaningful base for,
+# which is called Lemma
 def lemmatize_text(text):
     tokens = word_tokenize(text.lower())  # Tokenize and lowercase
-    lemmatized_tokens = [lemmatizer.lemmatize(token, get_wordnet_pos(token)) for token in tokens if token.isalpha()]  # Lemmatize
+    # Lemmatize
+    lemmatized_tokens = [lemmatizer.lemmatize(token, get_wordnet_pos(token)) for token in tokens if token.isalpha()]
     return ' '.join(lemmatized_tokens)
 
 
+# Function for stemming the dataset, a process that stems or removes last few characters from a word -
+# This often leads to incorrect meaning and spellings - Faster process than Lemmatizing
 def stem_text(text):
     tokens = word_tokenize(text.lower())  # Tokenize and lowercase
     stemmed_tokens = [stemmer.stem(token) for token in tokens if token.isalpha()]  # Stemming
@@ -77,68 +95,64 @@ def stem_text(text):
 stop_words = set(stopwords.words('english'))
 
 
-def preprocess_data(df):
+def preprocess_data(df, task):
+    """
+        Preprocesses the document data based on the specified task.
+
+        Parameters:
+            df (DataFrame): The input DataFrame containing the document and topic.
+            task (int): Determines the type of text processing to apply:
+                        1 - Basic,
+                        3 - Lemmatization,
+                        4 - Stemming.
+
+        Returns:
+            tuple: A tuple containing processed features and labels, vocabulary size, max sequence length,
+            and number of classes.
+        """
     # Print out first 5 columns/rows to make sure DF was created correctly
-    print(df.head())
-
-    # Check for any missing values/rows
-    print("Missing Values")
-    missing_values_count = df.isna().sum()
-    missing_values_count = missing_values_count[missing_values_count > 0]
-    print(missing_values_count)
-
-    unique_labels = df['topic'].unique()
-    label_encoder = LabelEncoder()
-    y_encoded = label_encoder.fit_transform(df['topic'])
-    num_classes = np.unique(y_encoded).shape[0]
-    y_one_hot = to_categorical(y_encoded, num_classes=num_classes)
-
-    print("Correct output shape:", y_one_hot.shape)
-
+    # print(df.head())
     # Get a count of the dataset
     # print(df.count)
 
+    print("Missing Values")
+    missing_values_count = df.isna().sum()
+    print(missing_values_count[missing_values_count > 0])
+
+    df.dropna(inplace=True)  # Handling missing values by dropping
+
+    # Encoding labels
+    label_encoder = LabelEncoder()
+    y_encoded = label_encoder.fit_transform(df['topic'])
+    y_one_hot = to_categorical(y_encoded)
+    num_classes = y_one_hot.shape[1]
+
+    print("Correct output shape:", y_one_hot.shape)
+
     # Apply the contains_emoji function to each row in the 'sentence' column
     df['contains_emoji'] = df['document'].apply(lambda x: contains_emoji(x))
-    print(df.head())
+    # print(df.head())
     true_count = df['contains_emoji'].sum()
     print(f"Number of rows with emojis: {true_count}")
-
     # Apply the function clean_text to your dataframe
+    # df['cleaned_text'] = df['document'].apply(clean_text)
+
+    # Text processing
     df['cleaned_text'] = df['document'].apply(clean_text)
+    if task == 3:
+        df['lemmatized_text'] = df['document'].apply(lemmatize_text)
+    elif task == 4:
+        df['stemmed_text'] = df['document'].apply(stem_text)
 
     all_words = [word for tokens in df['cleaned_text'] for word in tokens]
     word_counts = Counter(all_words)
 
-    # Vocabulary size
-    vocab_size = len(word_counts)
-    print(f"Vocabulary size: {vocab_size}")
-
-    # Plot the distribution of lengths
-    sequence_lengths = [len(tokens) for tokens in df['cleaned_text']]
-    plt.hist(sequence_lengths, bins=30)
-    plt.title('Distribution of Sequence Lengths')
-    plt.xlabel('Sequence Length')
-    plt.ylabel('Frequency')
-    # plt.show()
-
-    # Choosing a maximum sequence length
-    avg_length = np.mean(sequence_lengths)
-    std_length = np.std(sequence_lengths)
-    max_length = int(avg_length + 2 * std_length)
-    print(f"Suggested maximum sequence length: {max_length}")
-
-    # Initialize and fit the tokenizer
-    tokenizer = Tokenizer(num_words=vocab_size)
+    # Tokenization and padding
+    tokenizer = Tokenizer()
     tokenizer.fit_on_texts(df['document'])
-
-    # Convert sentences to sequences of integers
     sequences = tokenizer.texts_to_sequences(df['document'])
+    vocab_size = len(tokenizer.word_index) + 1
+    max_length = np.max([len(seq) for seq in sequences])
+    x_padded = pad_sequences(sequences, maxlen=max_length)
 
-    # Pad sequences to ensure uniform length
-    x_padded = pad_sequences(sequences, maxlen=max_length, padding='post')
-    print(x_padded[:5])
-    clean_df = pd.DataFrame(x_padded)
-    clean_df.to_csv('preped_data.csv', index=False)
-
-    return x_padded, y_one_hot, unique_labels, vocab_size, max_length, num_classes
+    return x_padded, y_one_hot, vocab_size, max_length, num_classes
